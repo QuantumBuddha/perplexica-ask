@@ -46,12 +46,8 @@ const PERPLEXICA_ASK_TOOL: Tool = {
   },
 };
 
-// Retrieve the Perplexity API key from environment variables
-const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY;
-if (!PERPLEXITY_API_KEY) {
-  console.error("Error: PERPLEXITY_API_KEY environment variable is required");
-  process.exit(1);
-}
+// Retrieve the Perplexica API key from environment variables (optional)
+const PERPLEXICA_API_KEY = process.env.PERPLEXICA_API_KEY;
 
 /**
  * Performs a search-based chat completion by sending a request to the Perplexica Search API.
@@ -104,14 +100,19 @@ async function performChatCompletion(
   // Construct the new API endpoint URL
   const url = new URL("https://perplexica.knaxx.com/api/search");
 
+  // Build headers, including Authorization only if the API key is provided.
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (PERPLEXICA_API_KEY) {
+    headers["Authorization"] = `Bearer ${PERPLEXICA_API_KEY}`;
+  }
+
   let response;
   try {
     response = await fetch(url.toString(), {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${PERPLEXITY_API_KEY}`,
-      },
+      headers,
       body: JSON.stringify(body),
     });
   } catch (error) {
