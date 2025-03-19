@@ -9,16 +9,16 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 
 /**
- * Definition of the Perplexity Ask Tool.
- * This tool accepts an array of messages and returns a chat completion response
- * from the Perplexity API, with citations appended to the message if provided.
+ * Definition of the Perplexica Ask Tool.
+ * This tool accepts an array of messages and returns a search response
+ * from the Perplexica Search API, with citations appended to the message if provided.
  */
-const PERPLEXITY_ASK_TOOL: Tool = {
-  name: "perplexity_ask",
+const PERPLEXICA_ASK_TOOL: Tool = {
+  name: "perplexica_ask",
   description:
-    "Engages in a conversation using the Sonar API. " +
+    "Engages in a conversation using the Perplexica Search API. " +
     "Accepts an array of messages (each with a role and content) " +
-    "and returns a ask completion response from the Perplexity model.",
+    "and returns a search response with citations from the Perplexica API.",
   inputSchema: {
     type: "object",
     properties: {
@@ -29,7 +29,8 @@ const PERPLEXITY_ASK_TOOL: Tool = {
           properties: {
             role: {
               type: "string",
-              description: "Role of the message (e.g., system, user, assistant)",
+              description:
+                "Role of the message (e.g., system, user, assistant)",
             },
             content: {
               type: "string",
@@ -53,25 +54,55 @@ if (!PERPLEXITY_API_KEY) {
 }
 
 /**
- * Performs a chat completion by sending a request to the Perplexity API.
- * Appends citations to the returned message content if they exist.
+ * Performs a search-based chat completion by sending a request to the Perplexica Search API.
+ * It converts an array of messages into a query and conversation history, then appends citations
+ * to the returned message if provided.
  *
  * @param {Array<{ role: string; content: string }>} messages - An array of message objects.
- * @returns {Promise<string>} The chat completion result with appended citations.
+ * @returns {Promise<string>} The search result with appended citations.
  * @throws Will throw an error if the API request fails.
  */
 async function performChatCompletion(
   messages: Array<{ role: string; content: string }>
 ): Promise<string> {
-  // Construct the API endpoint URL and request body
-  const url = new URL("https://api.perplexity.ai/chat/completions");
+  if (messages.length === 0) {
+    throw new Error("No messages provided");
+  }
+
+  // Use the last message as the query; convert earlier messages into history.
+  const queryMessage = messages[messages.length - 1];
+  const historyMessages = messages.slice(0, messages.length - 1);
+
+  // Convert history messages: convert "user" to "human", retain "assistant", ignore "system".
+  const convertedHistory = historyMessages
+    .map((msg) => {
+      if (msg.role === "user") {
+        return ["human", msg.content];
+      } else if (msg.role === "assistant") {
+        return ["assistant", msg.content];
+      }
+      return null; // Skip messages with roles like "system"
+    })
+    .filter((pair) => pair !== null);
+
+  // Construct the request body as per the new API specification
   const body = {
-    model: "sonar-pro", // Model identifier; adjust as needed
-    messages: messages,
-    // Additional parameters can be added here if required (e.g., max_tokens, temperature, etc.)
-    // See the Sonar API documentation for more details: 
-    // https://docs.perplexity.ai/api-reference/chat-completions
+    chatModel: {
+      provider: "openai",
+      model: "gpt-4o-mini",
+    },
+    embeddingModel: {
+      provider: "openai",
+      model: "text-embedding-3-large",
+    },
+    optimizationMode: "speed",
+    focusMode: "webSearch",
+    query: queryMessage.content,
+    history: convertedHistory,
   };
+
+  // Construct the new API endpoint URL
+  const url = new URL("https://perplexica.knaxx.com/api/search");
 
   let response;
   try {
@@ -84,10 +115,11 @@ async function performChatCompletion(
       body: JSON.stringify(body),
     });
   } catch (error) {
-    throw new Error(`Network error while calling Perplexity API: ${error}`);
+    throw new Error(
+      `Network error while calling Perplexica API: ${error}`
+    );
   }
 
-  // Check for non-successful HTTP status
   if (!response.ok) {
     let errorText;
     try {
@@ -96,26 +128,33 @@ async function performChatCompletion(
       errorText = "Unable to parse error response";
     }
     throw new Error(
-      `Perplexity API error: ${response.status} ${response.statusText}\n${errorText}`
+      `Perplexica API error: ${response.status} ${response.statusText}\n${errorText}`
     );
   }
 
-  // Attempt to parse the JSON response from the API
   let data;
   try {
     data = await response.json();
   } catch (jsonError) {
-    throw new Error(`Failed to parse JSON response from Perplexity API: ${jsonError}`);
+    throw new Error(
+      `Failed to parse JSON response from Perplexica API: ${jsonError}`
+    );
   }
 
-  // Directly retrieve the main message content from the response 
-  let messageContent = data.choices[0].message.content;
-
-  // If citations are provided, append them to the message content
-  if (data.citations && Array.isArray(data.citations) && data.citations.length > 0) {
+  // Retrieve the final message and append citations if sources are provided
+  let messageContent = data.message;
+  if (data.sources && Array.isArray(data.sources) && data.sources.length > 0) {
     messageContent += "\n\nCitations:\n";
-    data.citations.forEach((citation: string, index: number) => {
-      messageContent += `[${index + 1}] ${citation}\n`;
+    data.sources.forEach((source: any, index: number) => {
+      if (
+        source.metadata &&
+        source.metadata.title &&
+        source.metadata.url
+      ) {
+        messageContent += `[${index + 1}] ${source.metadata.title} - ${source.metadata.url}\n`;
+      } else {
+        messageContent += `[${index + 1}] ${source.pageContent}\n`;
+      }
     });
   }
 
@@ -125,7 +164,7 @@ async function performChatCompletion(
 // Initialize the server with tool metadata and capabilities
 const server = new Server(
   {
-    name: "example-servers/perplexity-ask",
+    name: "example-servers/perplexica-ask",
     version: "0.1.0",
   },
   {
@@ -137,10 +176,10 @@ const server = new Server(
 
 /**
  * Registers a handler for listing available tools.
- * When the client requests a list of tools, this handler returns the Perplexity Ask Tool.
+ * When the client requests a list of tools, this handler returns the Perplexica Ask Tool.
  */
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [PERPLEXITY_ASK_TOOL],
+  tools: [PERPLEXICA_ASK_TOOL],
 }));
 
 /**
@@ -157,11 +196,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       throw new Error("No arguments provided");
     }
     switch (name) {
-      case "perplexity_ask": {
+      case "perplexica_ask": {
         if (!Array.isArray(args.messages)) {
-          throw new Error("Invalid arguments for perplexity-ask: 'messages' must be an array");
+          throw new Error(
+            "Invalid arguments for perplexica-ask: 'messages' must be an array"
+          );
         }
-        // Invoke the chat completion function with the provided messages
         const messages = args.messages;
         const result = await performChatCompletion(messages);
         return {
@@ -170,14 +210,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
       default:
-        // Respond with an error if an unknown tool is requested
         return {
           content: [{ type: "text", text: `Unknown tool: ${name}` }],
           isError: true,
         };
     }
   } catch (error) {
-    // Return error details in the response
     return {
       content: [
         {
@@ -198,7 +236,7 @@ async function runServer() {
   try {
     const transport = new StdioServerTransport();
     await server.connect(transport);
-    console.error("Perplexity Ask MCP Server running on stdio");
+    console.error("Perplexica Ask MCP Server running on stdio");
   } catch (error) {
     console.error("Fatal error running server:", error);
     process.exit(1);
